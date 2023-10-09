@@ -5,20 +5,23 @@ package mount
 import (
 	"context"
 	"fmt"
-	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
-	"golang.org/x/sys/unix"
-	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/mount-utils"
-	"k8s.io/utils/exec"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"golang.org/x/sys/unix"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/mount-utils"
+	"k8s.io/utils/exec"
 )
 
 const (
 	diskIDPath = "/dev/disk/by-path"
+	legacySCSI = "pci-0000:00:10.0-scsi-0:0:%s:0"
+	pvSCSI     = "pci-0000:03:00.0-scsi-0:0:%s:0"
 )
 
 // Interface defines the set of methods to allow for
@@ -66,8 +69,8 @@ func (m *mounter) GetDevicePath(ctx context.Context, deviceID string, hypervisor
 
 	deviceID = CorrectDeviceId(ctx, deviceID, hypervisor)
 
-	deviceID = fmt.Sprintf("pci-0000:00:10.0-scsi-0:0:%s:0", deviceID)
-	ctxzap.Extract(ctx).Sugar().Debugf("device path: %s/%s", diskIDPath, deviceID)
+	legacyDeviceID := fmt.Sprintf(legacySCSI, deviceID)
+	pvDeviceID := fmt.Sprintf(pvSCSI, deviceID)
 
 	backoff := wait.Backoff{
 		Duration: 1 * time.Second,
@@ -77,7 +80,8 @@ func (m *mounter) GetDevicePath(ctx context.Context, deviceID string, hypervisor
 
 	var devicePath string
 	err := wait.ExponentialBackoffWithContext(ctx, backoff, func() (bool, error) {
-		path, err := m.getDevicePathBySerialID(deviceID)
+		path, err := m.getDevicePathBySerialID(ctx, legacyDeviceID, pvDeviceID)
+
 		if err != nil {
 			return false, err
 		}
@@ -119,10 +123,19 @@ func CorrectDeviceId(ctx context.Context, deviceID, hypervisor string) string {
 	return deviceID
 }
 
-func (m *mounter) getDevicePathBySerialID(volumeID string) (string, error) {
-	source := filepath.Join(diskIDPath, volumeID)
+func (m *mounter) getDevicePathBySerialID(ctx context.Context, legacyPath, pvPath string) (string, error) {
+	source := filepath.Join(diskIDPath, legacyPath)
 	_, err := os.Stat(source)
+
+	//If legacy path not exists, try with new path
+	if os.IsNotExist(err) {
+		ctxzap.Extract(ctx).Sugar().Debugf("no device found with legacy path '%s', try with '%s'", legacyPath, pvPath)
+		source = filepath.Join(diskIDPath, pvPath)
+		_, err = os.Stat(source)
+	}
+
 	if err == nil {
+		ctxzap.Extract(ctx).Sugar().Debugf("device found with path '%s'", source)
 		return source, nil
 	}
 	if !os.IsNotExist(err) {
