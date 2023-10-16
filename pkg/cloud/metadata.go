@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"strings"
 
@@ -62,7 +61,7 @@ type cloudInitV1 struct {
 func (c *client) readCloudInit(ctx context.Context, instanceFilePath string) (*cloudInitInstanceData, error) {
 	slog := ctxzap.Extract(ctx).Sugar()
 
-	b, err := ioutil.ReadFile(instanceFilePath)
+	b, err := os.ReadFile(instanceFilePath)
 	if err != nil {
 		slog.Errorf("Cannot read %s", instanceFilePath)
 		return nil, err

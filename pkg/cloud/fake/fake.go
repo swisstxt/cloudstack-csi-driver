@@ -112,7 +112,7 @@ func (f *fakeConnector) GetProjectID() string {
 
 func (f *fakeConnector) ListVolumesForVM(ctx context.Context, virtualMachineID, projectID string) ([]*cloud.Volume, error) {
 	var vols []*cloud.Volume
-	for i, _ := range f.volumesByID {
+	for i := range f.volumesByID {
 		v := f.volumesByID[i]
 		vols = append(vols, &v)
 	}

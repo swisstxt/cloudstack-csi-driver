@@ -146,7 +146,7 @@ func (c *client) ListVolumesForVM(ctx context.Context, virtualMachineID, project
 	}
 
 	volumes := make([]*Volume, len(l.Volumes))
-	for i, _ := range l.Volumes {
+	for i := range l.Volumes {
 		vol := l.Volumes[i]
 		v := &Volume{
 			ID:               vol.Id,
