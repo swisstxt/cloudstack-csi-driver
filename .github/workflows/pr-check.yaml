@@ -8,11 +8,11 @@ jobs:
     name: Lint
     runs-on: ubuntu-20.04
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v2
+        uses: golangci/golangci-lint-action@v3
         with:
-          version: v1.41.1
+          version: v1.54
           args: --timeout=5m
 
   build:
@@ -22,10 +22,10 @@ jobs:
       - name: Setup up Go 1.x
         uses: actions/setup-go@v2
         with:
-          go-version: "^1.15"
+          go-version: "^1.20"
 
       - name: Check out code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Cache
         uses: actions/cache@v2
@@ -40,6 +40,7 @@ jobs:
 
       - name: Run sanity tests
         run: make test-sanity
-
+        env:
+          NODE_HYPERVISOR: "test"
       - name: Build
         run: make

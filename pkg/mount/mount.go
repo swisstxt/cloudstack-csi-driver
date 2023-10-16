@@ -5,20 +5,23 @@ package mount
 import (
 	"context"
 	"fmt"
-	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
-	"golang.org/x/sys/unix"
-	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/mount-utils"
-	"k8s.io/utils/exec"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"golang.org/x/sys/unix"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/mount-utils"
+	"k8s.io/utils/exec"
 )
 
 const (
 	diskIDPath = "/dev/disk/by-path"
+	legacySCSI = "pci-0000:00:10.0-scsi-0:0:%s:0"
+	pvSCSI     = "pci-0000:03:00.0-scsi-0:0:%s:0"
 )
 
 // Interface defines the set of methods to allow for
@@ -64,10 +67,10 @@ func New() Interface {
 
 func (m *mounter) GetDevicePath(ctx context.Context, deviceID string, hypervisor string) (string, error) {
 
-	deviceID = CorrectDeviceId(ctx, deviceID, hypervisor)
+	deviceID = CorrectDeviceID(ctx, deviceID, hypervisor)
 
-	deviceID = fmt.Sprintf("pci-0000:00:10.0-scsi-0:0:%s:0", deviceID)
-	ctxzap.Extract(ctx).Sugar().Debugf("device path: %s/%s", diskIDPath, deviceID)
+	legacyDeviceID := fmt.Sprintf(legacySCSI, deviceID)
+	pvDeviceID := fmt.Sprintf(pvSCSI, deviceID)
 
 	backoff := wait.Backoff{
 		Duration: 1 * time.Second,
@@ -77,7 +80,8 @@ func (m *mounter) GetDevicePath(ctx context.Context, deviceID string, hypervisor
 
 	var devicePath string
 	err := wait.ExponentialBackoffWithContext(ctx, backoff, func() (bool, error) {
-		path, err := m.getDevicePathBySerialID(deviceID)
+		path, err := m.getDevicePathBySerialID(ctx, legacyDeviceID, pvDeviceID)
+
 		if err != nil {
 			return false, err
 		}
@@ -91,19 +95,19 @@ func (m *mounter) GetDevicePath(ctx context.Context, deviceID string, hypervisor
 	})
 
 	if err == wait.ErrWaitTimeout {
-		return "", fmt.Errorf("Failed to find device for the deviceID: %q within the alloted time", deviceID)
+		return "", fmt.Errorf("failed to find device for the deviceID: %q within the alloted time", deviceID)
 	} else if devicePath == "" {
-		return "", fmt.Errorf("Device path was empty for deviceID: %q", deviceID)
+		return "", fmt.Errorf("device path was empty for deviceID: %q", deviceID)
 	}
 	return devicePath, nil
 }
 
-//Corrects the device id on the node. the scsi id may not match th id which is set from te cloudstack controller
-//1. ClousStack assumes that SCSI ID 3 is always the CD-ROM and is ignoring this id.
-//https://github.com/apache/cloudstack/blob/98d42750cc21dfce5a8dd6d1880e09a621e0152e/server/src/main/java/com/cloud/storage/VolumeApiServiceImpl.java#L3442
-//2. SCSI ID 7 is reserved for the Virtual SCSI Controller
-//https://docs.vmware.com/en/VMware-vSphere/6.0/com.vmware.vsphere.hostclient.doc/GUID-5872D173-A076-42FE-8D0B-9DB0EB0E7362_copy.html
-func CorrectDeviceId(ctx context.Context, deviceID, hypervisor string) string {
+// Corrects the device id on the node. the scsi id may not match th id which is set from te cloudstack controller
+// 1. ClousStack assumes that SCSI ID 3 is always the CD-ROM and is ignoring this id.
+// https://github.com/apache/cloudstack/blob/98d42750cc21dfce5a8dd6d1880e09a621e0152e/server/src/main/java/com/cloud/storage/VolumeApiServiceImpl.java#L3442
+// 2. SCSI ID 7 is reserved for the Virtual SCSI Controller
+// https://docs.vmware.com/en/VMware-vSphere/6.0/com.vmware.vsphere.hostclient.doc/GUID-5872D173-A076-42FE-8D0B-9DB0EB0E7362_copy.html
+func CorrectDeviceID(ctx context.Context, deviceID, hypervisor string) string {
 	ctxzap.Extract(ctx).Sugar().Debugf("device id: '%s' (Hypervisor: %s)", deviceID, hypervisor)
 
 	if strings.ToLower(hypervisor) == "vmware" {
@@ -119,10 +123,19 @@ func CorrectDeviceId(ctx context.Context, deviceID, hypervisor string) string {
 	return deviceID
 }
 
-func (m *mounter) getDevicePathBySerialID(volumeID string) (string, error) {
-	source := filepath.Join(diskIDPath, volumeID)
+func (m *mounter) getDevicePathBySerialID(ctx context.Context, legacyPath, pvPath string) (string, error) {
+	source := filepath.Join(diskIDPath, legacyPath)
 	_, err := os.Stat(source)
+
+	//If legacy path not exists, try with new path
+	if os.IsNotExist(err) {
+		ctxzap.Extract(ctx).Sugar().Debugf("no device found with legacy path '%s', try with '%s'", legacyPath, pvPath)
+		source = filepath.Join(diskIDPath, pvPath)
+		_, err = os.Stat(source)
+	}
+
 	if err == nil {
+		ctxzap.Extract(ctx).Sugar().Debugf("device found with path '%s'", source)
 		return source, nil
 	}
 	if !os.IsNotExist(err) {
@@ -146,7 +159,7 @@ func (m *mounter) rescanScsi(ctx context.Context) {
 func (m *mounter) CleanScsi(ctx context.Context, deviceID, hypervisor string) {
 	log := ctxzap.Extract(ctx).Sugar()
 
-	deviceID = CorrectDeviceId(ctx, deviceID, hypervisor)
+	deviceID = CorrectDeviceID(ctx, deviceID, hypervisor)
 
 	devicePath := fmt.Sprintf("/sys/class/scsi_device/0:0:%s:0/device/delete", deviceID)
 	log.Debugf("removing SCSI devices on %s", devicePath)
@@ -162,19 +175,6 @@ func (m *mounter) CleanScsi(ctx context.Context, deviceID, hypervisor string) {
 
 func (m *mounter) GetDeviceName(mountPath string) (string, int, error) {
 	return mount.GetDeviceNameFromMount(m, mountPath)
-}
-
-// diskUUIDToSerial reproduces CloudStack function diskUuidToSerial
-// from https://github.com/apache/cloudstack/blob/0f3f2a0937/plugins/hypervisors/kvm/src/main/java/com/cloud/hypervisor/kvm/resource/LibvirtComputingResource.java#L3000
-//
-// This is what CloudStack do *with KVM hypervisor* to translate
-// a CloudStack volume UUID to libvirt disk serial.
-func diskUUIDToSerial(uuid string) string {
-	uuidWithoutHyphen := strings.ReplaceAll(uuid, "-", "")
-	if len(uuidWithoutHyphen) < 20 {
-		return uuidWithoutHyphen
-	}
-	return uuidWithoutHyphen[:20]
 }
 
 func (*mounter) ExistsPath(filename string) (bool, error) {
@@ -209,7 +209,7 @@ func (*mounter) MakeFile(pathname string) error {
 	return nil
 }
 
-//Copy Pasta from https://github.com/digitalocean/csi-digitalocean/blob/db266f4044178a96c5aa9e2420efae8723af75f4/driver/mounter.go
+// Copy Pasta from https://github.com/digitalocean/csi-digitalocean/blob/db266f4044178a96c5aa9e2420efae8723af75f4/driver/mounter.go
 func (m *mounter) GetStatistics(volumePath string) (volumeStatistics, error) {
 	isBlock, err := m.IsBlockDevice(volumePath)
 	if err != nil {

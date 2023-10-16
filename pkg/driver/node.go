@@ -389,6 +389,11 @@ func (ns *nodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVo
 	}
 
 	ctxzap.Extract(ctx).Sugar().Debugf("NodeGetVolumeStats: for volume %s", volumeID)
+
+	if _, err := os.Stat(volumePath); err != nil && os.IsNotExist(err) {
+		return nil, status.Errorf(codes.NotFound, "Volume ID %v on Path %s not found", volumeID, volumePath)
+	}
+
 	_, err := ns.connector.GetVolumeByID(ctx, volumeID)
 	if err == cloud.ErrNotFound {
 		return nil, status.Errorf(codes.NotFound, "Volume %v not found", volumeID)
