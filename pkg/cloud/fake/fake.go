@@ -109,3 +109,12 @@ func (f *fakeConnector) GetDomainID(ctx context.Context) (string, error) {
 func (f *fakeConnector) GetProjectID() string {
 	return "test"
 }
+
+func (f *fakeConnector) ListVolumesForVM(ctx context.Context, virtualMachineID, projectID string) ([]*cloud.Volume, error) {
+	var vols []*cloud.Volume
+	for i, _ := range f.volumesByID {
+		v := f.volumesByID[i]
+		vols = append(vols, &v)
+	}
+	return vols, nil
+}
