@@ -40,6 +40,7 @@ jobs:
 
       - name: Run sanity tests
         run: make test-sanity
-
+        env:
+          NODE_HYPERVISOR: "test"
       - name: Build
         run: make
