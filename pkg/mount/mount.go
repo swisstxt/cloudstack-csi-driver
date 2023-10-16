@@ -209,7 +209,7 @@ func (*mounter) MakeFile(pathname string) error {
 	return nil
 }
 
-//  Copy Pasta from https://github.com/digitalocean/csi-digitalocean/blob/db266f4044178a96c5aa9e2420efae8723af75f4/driver/mounter.go
+// Copy Pasta from https://github.com/digitalocean/csi-digitalocean/blob/db266f4044178a96c5aa9e2420efae8723af75f4/driver/mounter.go
 func (m *mounter) GetStatistics(volumePath string) (volumeStatistics, error) {
 	isBlock, err := m.IsBlockDevice(volumePath)
 	if err != nil {
